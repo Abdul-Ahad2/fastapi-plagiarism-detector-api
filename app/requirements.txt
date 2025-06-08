@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+motor                # Async MongoDB driver
+httpx
+nltk
+scikit-learn
+pdfminer.six
+python-docx
+newspaper3k
+pydantic

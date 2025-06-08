@@ -1,0 +1,13 @@
+from fastapi import APIRouter
+from app.config import MONGODB_URI, NEWS_API_KEY, CORE_API_KEY
+
+router = APIRouter()
+
+@router.get("/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "news_api_key_present": bool(NEWS_API_KEY),
+        "core_api_key_present": bool(CORE_API_KEY),
+        "mongodb_URI_present": bool(MONGODB_URI),
+    }
