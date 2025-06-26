@@ -1,23 +1,51 @@
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
 from difflib import SequenceMatcher
+from rapidfuzz import fuzz
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from newspaper import Article
-from app.config import MIN_WORDS_PER_SENTENCE, MIN_SENTENCE_LENGTH, SEQUENCE_THRESHOLD, TFIDF_THRESHOLD, EXACT_MATCH_SCORE
 
+from app.config import (
+    MIN_WORDS_PER_SENTENCE,
+    MIN_SENTENCE_LENGTH,
+    SEQUENCE_THRESHOLD,
+    TFIDF_THRESHOLD,
+    EXACT_MATCH_SCORE,
+)
+
+# Ensure required NLTK resources are downloaded
+nltk.download("punkt")
+nltk.download("stopwords")
+nltk.download("wordnet")
+
+lemmatizer = WordNetLemmatizer()
 
 def normalize_text(text: str) -> str:
+    """
+    Lowercase, remove punctuation, lemmatize, and collapse whitespace.
+    """
+    # Lowercase
     text = text.lower()
+    # Remove punctuation
     text = re.sub(r"[^\w\s]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    # Tokenize for lemmatization
+    tokens = word_tokenize(text)
+    # Lemmatize tokens
+    lemmas = [lemmatizer.lemmatize(token) for token in tokens]
+    # Reconstruct text and normalize whitespace
+    normalized = " ".join(lemmas)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
 
 
 def get_meaningful_sentences(text: str) -> List[str]:
+    """Split text into sentences and filter by length and word count."""
     sentences = sent_tokenize(text)
     filtered = []
     for s in sentences:
@@ -28,6 +56,7 @@ def get_meaningful_sentences(text: str) -> List[str]:
 
 
 def extract_keywords(text: str, max_keywords: int = 5) -> List[str]:
+    """Extract top-N frequent non-stopword keywords."""
     words = word_tokenize(text.lower())
     stop_words = set(stopwords.words("english"))
     filtered = [w for w in words if w.isalpha() and w not in stop_words and len(w) > 3]
@@ -36,10 +65,13 @@ def extract_keywords(text: str, max_keywords: int = 5) -> List[str]:
 
 
 def compute_tfidf_similarity(text1: str, text2: str) -> float:
-    if not text1 or not text2:
-        return 0.0
-    vectorizer = TfidfVectorizer(lowercase=True, token_pattern=r"\b[a-zA-Z]{2,}\b", strip_accents="unicode")
+    """Compute cosine similarity between two texts using TF-IDF."""
     try:
+        vectorizer = TfidfVectorizer(
+            lowercase=True,
+            token_pattern=r"\b[a-zA-Z]{2,}\b",
+            strip_accents="unicode",
+        )
         tfidf = vectorizer.fit_transform([text1, text2])
         sim = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
         return float(sim)
@@ -48,27 +80,37 @@ def compute_tfidf_similarity(text1: str, text2: str) -> float:
 
 
 def find_exact_matches(sentence: str, external_text: str) -> Optional[float]:
+    """
+    Try exact substring, then sequence+TF-IDF, then fuzzy matching for full sentences.
+    """
     normalized_sentence = normalize_text(sentence)
     normalized_external = normalize_text(external_text)
     if len(normalized_sentence) < MIN_SENTENCE_LENGTH:
         return None
 
-    # 1) Exact‐substring check
+    # 1) Exact-substring check
     if normalized_sentence in normalized_external:
         return EXACT_MATCH_SCORE
 
-    # 2) SequenceMatcher filter
+    # 2) SequenceMatcher + TF-IDF
     seq_sim = SequenceMatcher(None, normalized_sentence, normalized_external).ratio()
     if seq_sim >= SEQUENCE_THRESHOLD:
-        # 3) TF–IDF check
         tfidf_sim = compute_tfidf_similarity(normalized_sentence, normalized_external)
         if tfidf_sim >= TFIDF_THRESHOLD:
             return tfidf_sim
 
+    # 3) Fuzzy match for slight rewordings
+    fuzzy_score = fuzz.partial_ratio(normalized_sentence, normalized_external) / 100.0
+    if fuzzy_score >= SEQUENCE_THRESHOLD:
+        return round(fuzzy_score, 3)
+
     return None
 
 
-def find_partial_phrase_match(sentence: str, external_text: str) -> Optional[tuple[str, float]]:
+def find_partial_phrase_match(sentence: str, external_text: str) -> Optional[Tuple[str, float]]:
+    """
+    Slide a 5-word window and check for exact match then TF-IDF similarity.
+    """
     normalized_sentence = normalize_text(sentence)
     normalized_external = normalize_text(external_text)
     words = normalized_sentence.split()
@@ -87,6 +129,7 @@ def find_partial_phrase_match(sentence: str, external_text: str) -> Optional[tup
 
 
 def extract_full_text_from_news_article(url: str) -> str:
+    """Download and parse article via newspaper3k."""
     try:
         article = Article(url)
         article.download()
@@ -97,8 +140,10 @@ def extract_full_text_from_news_article(url: str) -> str:
 
 
 async def extract_full_text_from_pdf_url(url: str) -> str:
+    """Fetch a PDF and extract text asynchronously."""
     import httpx
     from app.utils.file_utils import extract_text_from_file
+
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(url)
