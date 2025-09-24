@@ -43,3 +43,10 @@ class ReportDetail(BaseModel):
     name: str
     content: str
     plagiarism_data: List[MatchDetail]
+
+class SourceData(BaseModel):
+    id: str          # MongoDB ObjectId as string
+    title: str
+    text: str
+    source_url: str
+    type: str 

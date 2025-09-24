@@ -34,9 +34,8 @@ async def get_current_user(
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # 3) Convert the ObjectId to a string before constructing the Pydantic model
+   
     user_doc["id"] = str(user_doc["_id"])
-    # If your Pydantic schema calls the field "_id", you can also do:
-    # user_doc["_id"] = str(user_doc["_id"])
+  
 
     return User(**user_doc)

@@ -1,15 +1,13 @@
-import asyncio
+import re
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, status
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends
 from fastapi.security import OAuth2PasswordBearer
 from motor.motor_asyncio import AsyncIOMotorClient
 from jose import jwt, JWTError
 
 from app.models.schemas import MatchDetail, ReportDetail
-from app.services.core_api import fetch_core_articles
-from app.services.guardian_api import fetch_guardian_all_pages
 from app.utils.file_utils import extract_text_from_file, allowed_file
 from app.utils.text_utils import (
     normalize_text,
@@ -17,39 +15,25 @@ from app.utils.text_utils import (
     extract_keywords,
     find_exact_matches,
     find_partial_phrase_match,
-    extract_full_text_from_pdf_url,
 )
-from app.config import MIN_SENTENCE_LENGTH, MONGODB_URI
+from app.config import MONGODB_URI
 
 router = APIRouter()
 
-# ───── JWT setup ─────
 SECRET_KEY = "your_nextauth_secret"
 ALGORITHM = "HS256"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
-
 
 def verify_token(token: str = Depends(oauth2_scheme)):
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-
-# ───── MongoDB client dependency ─────
 async def get_mongo_client():
     return AsyncIOMotorClient(MONGODB_URI)
 
-
-@router.post(
-    "/plagiarism/check",
-    response_model=ReportDetail,
-    dependencies=[Depends(verify_token)]
-)
+@router.post("/plagiarism/check", response_model=ReportDetail)
 async def check_plagiarism(
     file: Optional[UploadFile] = File(None),
     text: Optional[str] = Form(None),
@@ -59,8 +43,9 @@ async def check_plagiarism(
     start = datetime.utcnow()
     db = mongo_client.get_default_database()
     reports_collection = db["reports"]
+    data_collection = db["datas"]  
 
-    # 1. Extract raw text
+    # 1) Extract raw text
     if file and file.filename:
         if not allowed_file(file.filename):
             raise HTTPException(status_code=400, detail="Invalid file type.")
@@ -76,7 +61,7 @@ async def check_plagiarism(
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="No readable text found.")
 
-    # 2. Split into meaningful sentences
+    # 2) Sentence split
     sentences = get_meaningful_sentences(raw_text)
     if not sentences:
         empty_doc = {
@@ -99,44 +84,46 @@ async def check_plagiarism(
             plagiarism_data=[]
         )
 
-    # 3. Extract keywords for query
+    # 3) Build query
     keywords = extract_keywords(raw_text, max_keywords=5)
     query = " ".join(keywords) if keywords else raw_text[:100]
 
-    # 4. Fetch CORE.ac and Guardian in parallel
-    core_task     = fetch_core_articles(query)
-    guardian_task = fetch_guardian_all_pages(query, max_pages=3)
-    core_works, guardian_articles = await asyncio.gather(core_task, guardian_task)
+    # 4) Fetch candidates from DB (prefer $text)
+    external_texts: List[dict] = []
+    docs = []
+    try:
+        cursor = data_collection.find(
+            {"$text": {"$search": query}},
+            {"score": {"$meta": "textScore"}, "title": 1, "text": 1, "source_url": 1, "type": 1},
+        ).sort([("score", {"$meta": "textScore"})]).limit(200)
+        docs = await cursor.to_list(length=200)
+    except Exception:
+        pass
 
-    external_texts = []
+    if not docs:
+        tokens = keywords or re.findall(r"\w+", query)
+        if tokens:
+            regex = "|".join(re.escape(t) for t in tokens)
+            cursor = data_collection.find(
+                {"$or": [
+                    {"title": {"$regex": regex, "$options": "i"}},
+                    {"text":  {"$regex": regex, "$options": "i"}},
+                ]},
+                {"title": 1, "text": 1, "source_url": 1, "type": 1}
+            ).limit(200)
+            docs = await cursor.to_list(length=200)
 
-    # 5. Process CORE API results
-    for work in core_works:
-        content = work.get("text", "")
-        if not content.strip() and work.get("download_url"):
-            content = await extract_full_text_from_pdf_url(work["download_url"])
-        if not content.strip() and work.get("abstract"):
-            content = work["abstract"]
-        if content.strip():
-            external_texts.append({
-                "text":       content,
-                "title":      work.get("title", "Unknown"),
-                "source_url": f"https://core.ac.uk/works/{work.get('id','')}",
-                "type":       "academic",
-            })
-
-    # 6. Process Guardian results
-    for art in guardian_articles:
-        txt = art.get("text", "").strip()
+    for doc in docs:
+        txt = (doc.get("text") or "").strip()
         if txt:
             external_texts.append({
-                "text":       txt,
-                "title":      art.get("title", ""),
-                "source_url": art.get("url", ""),
-                "type":       "news",
+                "text": txt,
+                "title": doc.get("title", "Unknown"),
+                "source_url": doc.get("source_url", ""),
+                "type": doc.get("type", "other"),
             })
 
-    # 7. If no external_texts → empty report
+    # 5) No candidates → empty report
     if not external_texts:
         empty_doc = {
             "user_id": token_payload.get("sub"),
@@ -158,11 +145,7 @@ async def check_plagiarism(
             plagiarism_data=[]
         )
 
-    # 8. Normalize texts for matching
-    for ext in external_texts:
-        ext["normalized_text"] = normalize_text(ext["text"])
-
-    # 9. Perform matching
+    # 6) Matching (uses improved lexical funcs)
     plagiarism_data_for_db: List[dict] = []
     highest_similarity = 0.0
     all_matched_titles = set()
@@ -202,28 +185,28 @@ async def check_plagiarism(
                     all_matched_titles.add(ext["title"])
                     break
 
-    # 10. Compute elapsed time
-    elapsed   = datetime.utcnow() - start
+    # 7) Time & save
+    elapsed = datetime.utcnow() - start
     total_sec = int(elapsed.total_seconds())
-    mins, secs= divmod(total_sec, 60)
-    hours, mins= divmod(mins, 60)
+    mins, secs = divmod(total_sec, 60)
+    hours, mins = divmod(mins, 60)
     time_spent = f"{hours:d}:{mins:02d}:{secs:02d}" if hours else f"{mins:02d}:{secs:02d}"
 
-    # 11. Persist and return
     highest_pct = round(highest_similarity * 100, 1)
-    flagged     = highest_pct > 70
+    flagged = highest_pct > 70
 
     report_doc = {
-        "user_id":       token_payload.get("sub"),
-        "name":          title,
-        "date":          datetime.utcnow(),
-        "similarity":    highest_pct,
-        "sources":       list(all_matched_titles),
-        "word_count":    len(raw_text.split()),
-        "time_spent":    time_spent,
-        "flagged":       flagged,
+        "user_id": token_payload.get("sub"),
+        "name": title,
+        "date": datetime.utcnow(),
+        "similarity": highest_pct,
+        "sources": list(all_matched_titles),
+        "word_count": len(raw_text.split()),
+        "time_spent": time_spent,
+        "flagged": flagged,
         "plagiarism_data": [
             {
+                "matched_text": e["matched_text"],
                 "similarity":   e["similarity"],
                 "source_type":  e["source_type"],
                 "source_title": e["source_title"],
@@ -232,6 +215,7 @@ async def check_plagiarism(
             for e in plagiarism_data_for_db
         ],
     }
+    print(report_doc)
     insert_res = await reports_collection.insert_one(report_doc)
     return ReportDetail(
         id=str(insert_res.inserted_id),
