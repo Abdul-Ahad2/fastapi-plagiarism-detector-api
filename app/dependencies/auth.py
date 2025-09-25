@@ -1,12 +1,10 @@
-# app/dependencies/auth.py
-
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
-from app.config import MONGODB_URI, JWT_SECRET_KEY, JWT_ALGORITHM
+from config import MONGODB_URI, SECRET_KEY, ALGORITHM
 from app.models.schemas import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -18,10 +16,10 @@ async def get_current_user(
     token: str = Depends(oauth2_scheme),
     mongo_client: AsyncIOMotorClient = Depends(get_mongo_client),
 ):
-    # 1) Decode the JWT
     try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        user_id: str = payload.get("id")
+        # 1) Decode the JWT with the correct key and algorithm
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token payload")
     except JWTError:
@@ -34,8 +32,5 @@ async def get_current_user(
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
-   
     user_doc["id"] = str(user_doc["_id"])
-  
-
     return User(**user_doc)

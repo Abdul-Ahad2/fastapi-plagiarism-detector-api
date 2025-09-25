@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.config import MONGODB_URI, GUARDIAN_API_KEY, CORE_API_KEY
+from config import MONGODB_URI, GUARDIAN_API_KEY, CORE_API_KEY
 
 router = APIRouter()
 

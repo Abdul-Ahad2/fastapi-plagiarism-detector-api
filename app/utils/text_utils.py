@@ -6,7 +6,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from rapidfuzz.distance import Levenshtein  # edit-distance similarity
 
-from app.config import (
+from config import (
     MIN_WORDS_PER_SENTENCE,
     MIN_SENTENCE_LENGTH,
     SEQUENCE_THRESHOLD,   # use e.g. 0.75

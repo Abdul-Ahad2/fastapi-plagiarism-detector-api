@@ -1,7 +1,7 @@
 import tempfile
 from pdfminer.high_level import extract_text as extract_pdf_text
 from docx import Document as DocxDocument
-from app.config import ALLOWED_EXTENSIONS
+from config import ALLOWED_EXTENSIONS
 
 
 def allowed_file(filename: str) -> bool:

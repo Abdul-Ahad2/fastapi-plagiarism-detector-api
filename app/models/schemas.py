@@ -1,8 +1,31 @@
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 from typing import List, Optional
 from datetime import datetime
 
 # ───── Existing plagiarism‐response models ─────
+
+# A simple model for API messages
+class Message(BaseModel):
+    message: str
+
+# Authentication and User models
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class User(BaseModel):
+    id: str = Field(alias="_id")
+    email: str
+    is_active: bool = True
+    is_teacher: Optional[bool] = False
+
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {
+            # This is optional, but good for handling BSON ObjectId
+            datetime: lambda v: v.isoformat() if v else None
+        }
+
 
 class MatchDetail(BaseModel):
     matched_text: str
@@ -43,6 +66,7 @@ class ReportDetail(BaseModel):
     name: str
     content: str
     plagiarism_data: List[MatchDetail]
+    rag_summary: Optional[str] = None
 
 class SourceData(BaseModel):
     id: str          # MongoDB ObjectId as string
@@ -50,3 +74,4 @@ class SourceData(BaseModel):
     text: str
     source_url: str
     type: str 
+    embedding: Optional[List[float]] = None
