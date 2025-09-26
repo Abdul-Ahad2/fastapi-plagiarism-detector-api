@@ -34,7 +34,7 @@ async def register_user(
     is_teacher: bool = Form(False),
     mongo_client: AsyncIOMotorClient = Depends(get_mongo_client)
 ):
-    db = mongo_client.get_default_database()
+    db = mongo_client["plagiarism_detector"]  # Specify database name
     users_col = db["users"]
     
     # Check if user already exists
@@ -58,7 +58,7 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     mongo_client: AsyncIOMotorClient = Depends(get_mongo_client)
 ):
-    db = mongo_client.get_default_database()
+    db = mongo_client["plagiarism_detector"]  # Specify database name
     users_col = db["users"]
     
     user_doc = await users_col.find_one({"email": form_data.username})

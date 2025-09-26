@@ -37,7 +37,7 @@ async def check_plagiarism(
     Students can only upload single files and get lexical analysis
     """
     start = datetime.utcnow()
-    db = mongo_client.get_default_database()
+    db = mongo_client["plagiarism_detector"]
     reports_collection = db["reports"]
     data_collection = db["datas"]
 
@@ -375,7 +375,7 @@ async def add_documents_to_database(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded.")
 
-    db = mongo_client.get_default_database()
+    db = mongo_client["plagiarism_detector"]
     documents_added = []
 
     for file in files:

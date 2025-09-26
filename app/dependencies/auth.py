@@ -26,7 +26,7 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 
     # 2) Retrieve the user document from MongoDB
-    db = mongo_client.get_default_database()
+    db = mongo_client["plagiarism_detector"]
     users_col = db["users"]
     user_doc = await users_col.find_one({"_id": ObjectId(user_id)})
     if not user_doc:
