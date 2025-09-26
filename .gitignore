@@ -3,4 +3,5 @@ look.docx
 # Ignore Python bytecode files
 **/__pycache__/
 *.py[cod]
-*.pyo   
+*.pyo
+.env
